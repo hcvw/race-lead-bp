@@ -1,0 +1,489 @@
+---
+title: "mediation lead"
+author: "Mia Zhu"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+
+Load libraries 
+```{r warning=FALSE}
+library(CMAverse)
+library(haven)
+library(tidyverse)
+library(gtsummary)
+library(visR)
+library(MASS)
+library(caret)
+library(dplyr)
+library(tidyr)
+library(survival)
+library(survminer)
+library(mgcv)
+library(arsenal)
+library(geepack)
+library(logbin)
+library(mediation)
+library(survey)
+```
+
+read data and transformations 
+```{r}
+
+nhanes_3_org<-read_sas("C:/Users/17343/OneDrive - Umich/Winter 2024/EPID815/Lead paper/lead_htn.sas7bdat")
+#14626
+nhanes_new_org <- read_sas("C:/Users/17343/OneDrive - Umich/Winter 2024/EPID815/Lead paper/nhanes_new.sas7bdat")
+#9232
+
+#NHANES III data cleaning 
+
+nhanes_3_org$raceth <- as.numeric(nhanes_3_org$raceth)
+nhanes_3_org<-nhanes_3_org[-c(which(nhanes_3_org$raceth>2)),]
+nhanes_3_org$raceth <- nhanes_3_org$raceth-1
+nhanes_3_org$raceth<-as.factor(nhanes_3_org$raceth)
+summary(nhanes_3_org$raceth)
+
+nhanes_3_org$sex <- as.numeric(nhanes_3_org$sex)
+nhanes_3_org$sex <- nhanes_3_org$sex-1
+nhanes_3_org$sex <- as.factor(nhanes_3_org$sex)
+
+nhanes_3_org$logbpb<- log(nhanes_3_org$bpb)
+nhanes_3_org$bmi<- log(nhanes_3_org$bmi)
+nhanes_3_org$chol<- log(nhanes_3_org$chol) 
+nhanes_3_org$cotinine<- log(nhanes_3_org$cotinine)
+nhanes_3_org$creat<- log(nhanes_3_org$creat)
+
+#NHANES 2017-2020 cleaning
+
+
+nhanes_new_org <- subset(nhanes_new_org, RIDRETH1 == 3 | RIDRETH1 == 4)
+summary(nhanes_new_org$RIDRETH1)
+nhanes_new_org$RIDRETH1 <- nhanes_new_org$RIDRETH1-3
+nhanes_new_org$RIDRETH1<-as.factor(nhanes_new_org$RIDRETH1)
+summary(nhanes_new_org$RIDRETH1)
+
+summary(nhanes_new_org$RIAGENDR)
+nhanes_new_org$RIAGENDR <- nhanes_new_org$RIAGENDR-1
+nhanes_new_org$RIAGENDR <- as.factor(nhanes_new_org$RIAGENDR)
+
+nhanes_new_org$logLBXBPB <- log(nhanes_new_org$LBXBPB)
+nhanes_new_org$packyrs <- log(nhanes_new_org$packyrs)
+nhanes_new_org$alc_freq <- log(nhanes_new_org$alc_freq)
+nhanes_new_org$BMXBMI <- log(nhanes_new_org$BMXBMI)
+nhanes_new_org$LBXSCH <- log(nhanes_new_org$LBXSCH)
+nhanes_new_org$LBXSCR <- log(nhanes_new_org$LBXSCR)
+nhanes_new_org$URXUCD <- log(nhanes_new_org$URXUCD)
+nhanes_new_org$LBXCOT <- log(nhanes_new_org$LBXCOT)
+
+
+```
+
+
+
+
+underadjusted model NHANES 2017-2020
+```{r} 
+
+nhanes_new <- subset(nhanes_new_org, !is.na(LBXBPB) & !is.na(mean_sbp) & !is.na(RIDRETH1) & !is.na(RIDAGEYR))
+
+attach(nhanes_new)
+
+#underadjusted model for sbp as the outcome
+set.seed(6)
+est.underadj_sbp <- cmest(data=nhanes_new, model = "rb", outcome = "mean_sbp", exposure ="RIDRETH1",
+                            mediator = "logLBXBPB", basec = c("RIDAGEYR", "RIAGENDR"), EMint =TRUE,
+                            yreg = "linear", mreg = list("linear"),
+                             astar = 0, a = 1, mval =  list(quantile(logLBXBPB, c(.10), na.rm=TRUE)), 
+                            estimation = "imputation", multimp = FALSE, inference = "bootstrap", nboot=1000)
+ 
+summary(est.underadj_sbp)
+
+
+#underadjusted model for hypertension as the outcome 
+set.seed(6)
+est.underadj_htn <- cmest(data=nhanes_new, model = "rb", outcome = "htn", exposure ="RIDRETH1",
+                            mediator = "logLBXBPB", basec = c("RIDAGEYR", "RIAGENDR"), EMint =TRUE,
+                            mreg = list("linear"), yreg = "loglinear",
+                            astar = 0, a = 1, mval =  list(quantile(logLBXBPB, c(.10), na.rm=TRUE)), 
+                            estimation = "imputation", multimp = FALSE, inference = "bootstrap", nboot=1000)
+summary(est.underadj_htn)
+
+
+```
+
+
+gformula NHANES 2017-2020
+
+```{r}
+
+nhanes_new_g <- subset(nhanes_new_org, !is.na(LBXBPB) & !is.na(mean_sbp) & !is.na(RIDRETH1)& !is.na(RIDAGEYR)& !is.na(RIAGENDR)& !is.na(BMXBMI)& !is.na(INDFMPIR)& !is.na(LBXSCH)& !is.na(educ)& !is.na(HEI2015_TOTAL_SCORE)& !is.na(pa_rec_hrs_week)& !is.na(LBXSCR)& !is.na(LBXCOT))
+attach(nhanes_new_g)
+
+
+nhanes_new_g$m <- nhanes_new_g$logLBXBPB
+
+#gformula for sbp as the outcome 
+
+set.seed(6)
+est.adj.wb.newfin_sbp = cmest(data = nhanes_new_g, model = "gformula", outcome = "mean_sbp", exposure = "RIDRETH1",
+                   mediator = "m", basec = c("RIDAGEYR","RIAGENDR"), EMint = TRUE,
+                  postc=c("BMXBMI", "INDFMPIR", "LBXSCH", "educ", "HEI2015_TOTAL_SCORE", "pa_rec_hrs_week", "LBXSCR", "LBXCOT"),
+                   yreg = "linear",
+                   mreg = list("linear"),
+                   postcreg = list("linear", "linear", "linear", "linear", "linear", "linear", "linear", "linear" ),
+                   astar = 0, a = 1, estimation = "imputation", mval = list(-0.9636453),
+                   inference = "bootstrap", multimp = FALSE, nboot = 1000)
+
+summary(est.adj.wb.newfin_sbp)
+
+#gformula for htn as the outcome 
+
+set.seed(6)
+est.adj.wb.newfin_htn = cmest(data = nhanes_new_g, model = "gformula", outcome = "htn", exposure = "RIDRETH1",
+                   mediator = "m", basec = c("RIDAGEYR","RIAGENDR"), EMint = TRUE,
+                  postc=c("BMXBMI", "INDFMPIR", "LBXSCH", "educ", "HEI2015_TOTAL_SCORE", "pa_rec_hrs_week", "LBXSCR", "LBXCOT"),
+                   yreg = "loglinear",
+                   mreg = list("linear"),
+                   postcreg = list("linear", "linear", "linear", "linear", "linear", "linear", "linear", "linear" ),
+                   astar = 0, a = 1, estimation = "imputation", mval = list(-0.9636453),
+                   inference = "bootstrap", multimp = FALSE, nboot = 1000)
+summary(est.adj.wb.newfin_htn)
+```
+
+
+overadjusted NHANES 2017-2020
+```{r}
+
+attach(nhanes_new_g)
+
+#overadjusted for sbp as the outcome 
+
+
+set.seed(6)
+est.overadj_sbp <- cmest(data=nhanes_new_g, model = "rb", outcome = "mean_sbp", exposure ="RIDRETH1",
+                            mediator = "logLBXBPB", basec = c("RIDAGEYR", "RIAGENDR", "BMXBMI", "INDFMPIR", "LBXSCH", "educ", "HEI2015_TOTAL_SCORE", "pa_rec_hrs_week", "LBXSCR", "LBXCOT"), EMint =TRUE,
+                            yreg = "linear", mreg = list("linear"),
+                             astar = 0, a = 1, mval =  list(-0.9636453), 
+                            estimation = "imputation", multimp = FALSE, inference = "bootstrap", nboot=1000)
+                                        
+summary(est.overadj_sbp)
+
+
+#overadjusted for htn as the outcome 
+set.seed(6)
+est.overadj_htn <- cmest(data=nhanes_new_g, model = "rb", outcome = "htn", exposure ="RIDRETH1",
+                            mediator = "logLBXBPB", basec = c("RIDAGEYR", "RIAGENDR", "BMXBMI", "INDFMPIR", "LBXSCH", "educ", "HEI2015_TOTAL_SCORE", "pa_rec_hrs_week", "LBXSCR", "LBXCOT"), EMint =TRUE,
+                            mreg = list("linear"), yreg = "loglinear",
+                            astar = 0, a = 1, mval =  list(-0.9636453), 
+                            estimation = "imputation", multimp = FALSE , inference = "bootstrap", nboot=1000)
+summary(est.overadj_htn)
+
+
+```
+
+
+NHANES III underadjusted 
+```{r}
+
+nhanes_3 <- subset(nhanes_3_org, !is.na(logbpb) & !is.na(sbp) & !is.na(raceth))
+attach(nhanes_3)
+
+#for sbp as the outcome 
+set.seed(6)
+est.adj <- cmest(data=nhanes_3, model = "rb", outcome = "sbp", exposure ="raceth",
+                            mediator = "logbpb", basec = c("age", "sex"), EMint =TRUE,
+                           mreg = list("linear"), yreg = "linear",
+                             astar = 0, a = 1, mval =  list(quantile(logbpb, c(.10), na.rm=TRUE)), 
+                            estimation = "imputation", multimp = FALSE, inference = "bootstrap", nboot=10)
+ 
+summary(est.adj)
+
+#for htn as the outcome 
+set.seed(6)
+est.adj <- cmest(data=nhanes_3, model = "rb", outcome = "htn", exposure ="raceth",
+                            mediator = "logbpb", basec = c("age", "sex"), EMint =TRUE,
+                           mreg = list("linear"), yreg = "loglinear",
+                             astar = 0, a = 1, mval =  list(quantile(logbpb, c(.10), na.rm=TRUE)), 
+                            estimation = "imputation", multimp = FALSE, inference = "bootstrap", nboot=1000)
+summary(est.adj)
+
+```
+ 
+ 
+ NHANES III gformula 
+```{r}
+
+set.seed(6)
+
+nhanes_3_g <- subset(nhanes_3, !is.na(logbpb) & !is.na(sbp) & !is.na(raceth)& !is.na(age)& !is.na(sex)& !is.na(bmi)& !is.na(pir)& !is.na(chol)& !is.na(educ)& !is.na(HEISCORE)& !is.na(phyact)& !is.na(creat)& !is.na(cotinine))
+ 
+nhanes_3_g$m <- nhanes_3_g$logbpb
+
+
+#for sbp as the outcome 
+
+Y.M.gfor.oldfin.sbp <- cmest(data = nhanes_3_g, model = "gformula", outcome = "sbp", exposure = "raceth",
+                    mediator = "m", basec = c("age", "sex"), postc = c("bmi", "pir", "chol", "educ", "HEISCORE", "phyact", "creat", "cotinine"), EMint = TRUE,
+                    yreg = "linear", mreg = list("linear"), postcreg = list("linear", "linear", "linear", "linear", "linear", "linear", "linear", "linear"),
+                    astar = 0, a = 1, mval = list(0.09531018),
+                    estimation = "imputation", multimp = FALSE, inference = "bootstrap", nboot = 1000)
+summary(Y.M.gfor.oldfin.sbp)
+ 
+
+#for htn as the outcome 
+set.seed(6)
+Y.M.gfor.oldfin.htn <- cmest(data = nhanes_3_g, model = "gformula", outcome = "htn", exposure = "raceth",
+                    mediator = "m", basec = c("age", "sex"), postc = c("bmi", "pir", "chol", "educ", "HEISCORE", "phyact", "creat", "cotinine"), EMint = TRUE,
+                    yreg = "loglinear", mreg = list("linear"), postcreg = list("linear", "linear", "linear", "linear", "linear", "linear", "linear", "linear"),
+                    astar = 0, a = 1, mval = list(0.09531018),
+                    estimation = "imputation", multimp = FALSE, inference = "bootstrap", nboot = 1000)
+summary(Y.M.gfor.oldfin.htn)
+
+```
+
+
+sensitivity analysis E-vales
+
+```{r}
+#new dataset
+#sbp
+cmsens(object=est.adj.wb.newfin_sbp, sens="uc")
+
+#htn
+cmsens(object=est.adj.wb.newfin_htn, sens="uc")
+
+#old dataset
+#sbp
+cmsens(object=Y.M.gfor.oldfin.sbp, sens="uc")
+#htn
+cmsens(object=Y.M.gfor.oldfin.htn, sens="uc")
+
+```
+
+overadj NHANES III
+```{r}
+
+#for sbp as the outcome 
+set.seed(6)
+est.overadj_sbp_old <- cmest(data=nhanes_3_g, model = "rb", outcome = "sbp", exposure ="raceth",
+                            mediator = "logbpb", basec = c("age", "sex", "bmi", "pir", "chol", "educ", "HEISCORE", "phyact", "creat", "cotinine"), EMint =TRUE,
+                           mreg = list("linear"), yreg = "linear",
+                             astar = 0, a = 1, mval =  list(0.09531018 ), 
+                            estimation = "imputation", multimp = FALSE, inference = "bootstrap", nboot=1000)
+ 
+summary(est.overadj_sbp_old)
+
+
+#for htn as the outcome 
+set.seed(6)
+est.overadj_htn_old <- cmest(data=nhanes_3_g, model = "rb", outcome = "htn", exposure ="raceth",
+                            mediator = "logbpb", basec = c("age", "sex", "bmi", "pir", "chol", "educ", "HEISCORE", "phyact", "creat", "cotinine"), EMint =TRUE,
+                           mreg = list("linear"), yreg = "loglinear",
+                             astar = 0, a = 1, mval =  list(0.09531018), 
+                            estimation = "imputation", multimp = FALSE, inference = "bootstrap", nboot=1000)
+summary(est.overadj_htn_old)
+
+```
+
+Hypertension medication = 0 
+```{r}
+
+med_no <- subset (nhanes_3, med_ht==0)
+
+med_no_new <- subset (nhanes_new, med_ht==0)
+
+#gformula new nhanes 
+
+
+med_no_new_g <- subset(med_no_new, !is.na(LBXBPB) & !is.na(mean_sbp) & !is.na(RIDRETH1)& !is.na(RIDAGEYR)& !is.na(RIAGENDR)& !is.na(BMXBMI)& !is.na(INDFMPIR)& !is.na(LBXSCH)& !is.na(educ)& !is.na(HEI2015_TOTAL_SCORE)& !is.na(pa_rec_hrs_week)& !is.na(LBXSCR)& !is.na(LBXCOT))
+attach(med_no_new_g)
+
+
+med_no_new_g$m <- med_no_new_g$logLBXBPB
+
+#sbp NHANES 2017-2020
+set.seed(6)
+est.nomed.sbp = cmest(data = med_no_new_g, model = "gformula", outcome = "mean_sbp", exposure = "RIDRETH1",
+                   mediator = "m", basec = c("RIDAGEYR","RIAGENDR"), EMint = TRUE,
+                  postc=c("BMXBMI", "INDFMPIR", "LBXSCH", "educ", "HEI2015_TOTAL_SCORE", "pa_rec_hrs_week", "LBXSCR", "LBXCOT"),
+                   yreg = "linear",
+                   mreg = list("linear"),
+                   postcreg = list("linear", "linear", "linear", "linear", "linear", "linear", "linear", "linear" ),
+                   astar = 0, a = 1, estimation = "imputation", mval = list(-0.9636453),
+                   inference = "bootstrap", multimp = FALSE, nboot = 1000)
+
+summary(est.nomed.sbp)
+
+#htn NHANES 2017-2020 
+set.seed(6)
+est.nomed.htn = cmest(data = med_no_new_g, model = "gformula", outcome = "htn", exposure = "RIDRETH1",
+                   mediator = "m", basec = c("RIDAGEYR","RIAGENDR"), EMint = TRUE,
+                  postc=c("BMXBMI", "INDFMPIR", "LBXSCH", "educ", "HEI2015_TOTAL_SCORE", "pa_rec_hrs_week", "LBXSCR", "LBXCOT"),
+                   yreg = "loglinear",
+                   mreg = list("linear"),
+                   postcreg = list("linear", "linear", "linear", "linear", "linear", "linear", "linear", "linear" ),
+                   astar = 0, a = 1, estimation = "imputation", mval = list(-0.9636453),
+                   inference = "bootstrap", multimp = FALSE, nboot = 1000)
+summary(est.nomed.htn)
+
+
+# gformula old dataset
+
+med_no_g <- subset(med_no, !is.na(logbpb) & !is.na(sbp) & !is.na(raceth)& !is.na(age)& !is.na(sex)& !is.na(bmi)& !is.na(pir)& !is.na(chol)& !is.na(educ)& !is.na(HEISCORE)& !is.na(phyact)& !is.na(creat)& !is.na(cotinine))
+
+med_no_g$m <- med_no_g$logbpb
+
+#NHANES III SBP
+
+set.seed(6)
+
+est.nomed.sbp.old <- cmest(data = med_no_g, model = "gformula", outcome = "sbp", exposure = "raceth",
+                    mediator = "m", basec = c("age", "sex"), postc = c("bmi", "pir", "chol", "educ", "HEISCORE", "phyact", "creat", "cotinine"), EMint = TRUE,
+                    yreg = "linear", mreg = list("linear"), postcreg = list("linear", "linear", "linear", "linear", "linear", "linear", "linear", "linear"),
+                    astar = 0, a = 1, mval = list(0.09531018),
+                    estimation = "imputation", multimp = FALSE, inference = "bootstrap", nboot = 1000)
+summary(est.nomed.sbp.old)
+
+#NHANES III htn
+
+set.seed(6)
+est.nomed.htn.old <- cmest(data = med_no_g, model = "gformula", outcome = "htn", exposure = "raceth",
+                    mediator = "m", basec = c("age", "sex"), postc = c("bmi", "pir", "chol", "educ", "HEISCORE", "phyact", "creat", "cotinine"), EMint = TRUE,
+                    yreg = "loglinear", mreg = list("linear"), postcreg = list("linear", "linear", "linear", "linear", "linear", "linear", "linear", "linear"),
+                    astar = 0, a = 1, mval = list(0.09531018),
+                    estimation = "imputation", multimp = FALSE, inference = "bootstrap", nboot = 1000)
+summary(est.nomed.htn.old)
+
+
+```
+
+
+Furthur adjust with MI 
+```{r}
+#New NHANES data gformula 
+
+
+attach(nhanes_new_org)
+nhanes_new_org$m <- nhanes_new_org$logLBXBPB
+
+
+#sbp 
+
+set.seed(6)
+est.adj.wb = cmest(data = nhanes_new_org, model = "gformula", outcome = "mean_sbp", exposure = "RIDRETH1",
+                   mediator = "m", basec = c("RIDAGEYR","RIAGENDR"), EMint = TRUE,
+                  postc=c("BMXBMI", "INDFMPIR", "LBXSCH", "educ", "HEI2015_TOTAL_SCORE", "pa_rec_hrs_week", "LBXSCR", "LBXCOT"),
+                   yreg = "linear",
+                   mreg = list("linear"),
+                   postcreg = list("linear", "linear", "linear", "linear", "linear", "linear", "linear", "linear" ),
+                   astar = 0, a = 1, estimation = "imputation", mval = list(-0.9636453),
+                   inference = "bootstrap", multimp = TRUE, nboot = 1000)
+
+summary(est.adj.wb)
+
+#htn
+set.seed(6)
+est.adj.wb = cmest(data = nhanes_new_org, model = "gformula", outcome = "htn", exposure = "RIDRETH1",
+                   mediator = "m", basec = c("RIDAGEYR","RIAGENDR"), EMint = TRUE,
+                  postc=c("BMXBMI", "INDFMPIR", "LBXSCH", "educ", "HEI2015_TOTAL_SCORE", "pa_rec_hrs_week", "LBXSCR", "LBXCOT"),
+                   yreg = "loglinear",
+                   mreg = list("linear"),
+                   postcreg = list("linear", "linear", "linear", "linear", "linear", "linear", "linear", "linear" ),
+                   astar = 0, a = 1, estimation = "imputation", mval = list(-0.9636453),
+                   inference = "bootstrap", multimp = TRUE, nboot = 1000)
+summary(est.adj.wb)
+
+
+
+
+#old dataset 
+
+attach(nhanes_3_org)
+
+set.seed(6)
+
+nhanes_3_org$m <- nhanes_3_org$logbpb
+
+#sbp
+Y.M.gfor <- cmest(data = nhanes_3_org, model = "gformula", outcome = "sbp", exposure = "raceth",
+                    mediator = "m", basec = c("age", "sex"), postc = c("bmi", "pir", "chol", "educ", "HEISCORE", "phyact", "creat", "cotinine"), EMint = TRUE,
+                    yreg = "linear", mreg = list("linear"), postcreg = list("linear", "linear", "linear", "linear", "linear", "linear", "linear", "linear"),
+                    astar = 0, a = 1, mval = list(0.09531018),
+                    estimation = "imputation", multimp = TRUE, inference = "bootstrap", nboot = 1000)
+summary(Y.M.gfor)
+
+
+#htn
+set.seed(6)
+Y.M.gfor <- cmest(data = nhanes_3_org, model = "gformula", outcome = "htn", exposure = "raceth",
+                    mediator = "m", basec = c("age", "sex"), postc = c("bmi", "pir", "chol", "educ", "HEISCORE", "phyact", "creat", "cotinine"), EMint = TRUE,
+                    yreg = "loglinear", mreg = list("linear"), postcreg = list("linear", "linear", "linear", "linear", "linear", "linear", "linear", "linear"),
+                    astar = 0, a = 1, mval = list(0.09531018),
+                    estimation = "imputation", multimp = TRUE, inference = "bootstrap", nboot = 1000)
+summary(Y.M.gfor)
+
+```
+
+
+
+
+Never smokers
+
+```{r}
+nev_smok_new <- subset(nhanes_new_g, smk==1)
+attach(nev_smok_new)
+#gformula NHANES 2017-2020
+
+
+#sbp
+
+set.seed(6)
+est.adj.wb = cmest(data = nev_smok_new, model = "gformula", outcome = "mean_sbp", exposure = "RIDRETH1",
+                   mediator = "m", basec = c("RIDAGEYR","RIAGENDR"), EMint = TRUE,
+                  postc=c("BMXBMI", "INDFMPIR", "LBXSCH", "educ", "HEI2015_TOTAL_SCORE", "pa_rec_hrs_week", "LBXSCR", "LBXCOT"),
+                   yreg = "linear",
+                   mreg = list("linear"),
+                   postcreg = list("linear", "linear", "linear", "linear", "linear", "linear", "linear", "linear" ),
+                   astar = 0, a = 1, estimation = "imputation", mval = list(-0.9636453),
+                   inference = "bootstrap", multimp = FALSE, nboot = 1000)
+
+summary(est.adj.wb)
+
+
+#htn
+set.seed(6)
+est.adj.wb = cmest(data = nev_smok_new, model = "gformula", outcome = "htn", exposure = "RIDRETH1",
+                   mediator = "m", basec = c("RIDAGEYR","RIAGENDR"), EMint = TRUE,
+                  postc=c("BMXBMI", "INDFMPIR", "LBXSCH", "educ", "HEI2015_TOTAL_SCORE", "pa_rec_hrs_week", "LBXSCR", "LBXCOT"),
+                   yreg = "loglinear",
+                   mreg = list("linear"),
+                   postcreg = list("linear", "linear", "linear", "linear", "linear", "linear", "linear", "linear" ),
+                   astar = 0, a = 1, estimation = "imputation", mval = list(-0.9636453),
+                   inference = "bootstrap", multimp = FALSE, nboot = 1000)
+summary(est.adj.wb)
+
+#NHANES III
+nev_smok_old <- subset(nhanes_3_g, smk==1)
+attach(nev_smok_old)
+
+#sbp
+set.seed(6)
+Y.M.gfor <- cmest(data = nev_smok_old, model = "gformula", outcome = "sbp", exposure = "raceth",
+                    mediator = "m", basec = c("age", "sex"), postc = c("bmi", "pir", "chol", "educ", "HEISCORE", "phyact", "creat", "cotinine"), EMint = TRUE,
+                    yreg = "linear", mreg = list("linear"), postcreg = list("linear", "linear", "linear", "linear", "linear", "linear", "linear", "linear"),
+                    astar = 0, a = 1, mval = list(0.09531018),
+                    estimation = "imputation", multimp = FALSE, inference = "bootstrap", nboot = 1000)
+summary(Y.M.gfor)
+
+#htn
+set.seed(6)
+Y.M.gfor <- cmest(data = nev_smok_old, model = "gformula", outcome = "htn", exposure = "raceth",
+                    mediator = "m", basec = c("age", "sex"), postc = c("bmi", "pir", "chol", "educ", "HEISCORE", "phyact", "creat", "cotinine"), EMint = TRUE,
+                    yreg = "loglinear", mreg = list("linear"), postcreg = list("linear", "linear", "linear", "linear", "linear", "linear", "linear", "linear"),
+                    astar = 0, a = 1, mval = list(0.09531018),
+                    estimation = "imputation", multimp = FALSE, inference = "bootstrap", nboot = 1000)
+summary(Y.M.gfor)
+```
+
